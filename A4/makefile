@@ -3,7 +3,7 @@ CFLAGS = -g -Wall
 SRC = alloc.c
 OBJ = alloc.o
 
-TESTS = driver
+TESTS = driver error_finalize_memallocate
 
 .PHONY: all clean rebuild test
 all: alloc
