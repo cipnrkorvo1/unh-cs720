@@ -11,8 +11,8 @@
 extern long __data_start[];
 extern long _end[];
 
-static long *_stack_top;
-static long *_frame_bottom;
+static long *_stack_top;            // low address
+static long *_frame_bottom;         // high address
 
 typedef struct Block {
     unsigned long info;
@@ -26,10 +26,27 @@ unsigned long total_heap_size = 0;
 
 #define BLOCK_SIZE (sizeof(block_t) / 8)
 
+// SMALL HELPERS
+
 static unsigned long infoMake(int alloc, int mark, unsigned long size)
 {
     return ((long)alloc << 63) | ((long)(mark & 1) << 62) | (size & SIZE_MASK);
 }
+
+static char inGlobalRange(unsigned long val)
+{
+    return (unsigned long)__data_start <= val && val < (unsigned long)_end;
+}
+static char inStackRange(unsigned long val)
+{
+    return (unsigned long)_frame_bottom > val && val >= (unsigned long)_stack_top;
+}
+static char inHeapRange(unsigned long val)
+{
+    return (unsigned long)heap <= val && val < ((unsigned long)heap) + total_heap_size;
+}
+
+// END SMALL HELPERS
 
 // returns the block that the ptr resides within, or NULL if invalid
 static block_t* getBlock(unsigned long ptr)
@@ -51,6 +68,7 @@ static block_t* getBlock(unsigned long ptr)
 }
 
 // function to check whether ptr points to allocated data
+// TODO: check down linked list of references? perhaps another function
 static char pointsToAllocatedData(unsigned long ptr)
 {
     block_t *block = getBlock(ptr);
@@ -60,10 +78,76 @@ static char pointsToAllocatedData(unsigned long ptr)
 
 static int markAndSweep()
 {
-    // search globals for references
-    
+    // STEP 1: MARK ALL USED BLOCKS
+    // 1a. search globals for references
+    long global_length = ((long)_end - (long)__data_start) / sizeof(long);
+    for (int i = 0; i < global_length; i++)
+    {
+        // !!!!! pointsToAllocatedData(__data_start[i]);
+        // TODO: travel down the linked list for each __data_start[i] until it finds a block IN USE that is pointed to
 
-    // search stack for references
+    }
+    // 1b. search stack for references
+    int frame_count = 0;
+    char sweeping = 1;
+    long *top = _stack_top;
+    long *bottom = _frame_bottom;
+    while (sweeping)
+    {
+        // check if bottom is a valid frame base first
+        if (bottom <= top || !bottom) break;                    // bottom invalid value
+        if (bottom == top || frame_count > 128) break;          // infinite loop
+        if ((long)bottom & (sizeof(void*)-1)) break;            // check for alignment
+
+        long *addr = top;
+        while (addr <= bottom)
+        {
+            // !!!!! pointsToAllocatedData(*addr);
+            // TODO: travel down the linked list for each *addr until it finds a block IN USE that is pointed to
+            addr++;
+        }
+        top = bottom;
+        bottom = (long *)*bottom;
+    }
+    // 1c. search heap for references
+    // TODO
+    // if a reference to block A is located in an unmarked block B, the ref is invalid
+    // but if block C is marked and has a ref to block B then B is marked, then the ref to A is valid!
+    // must loop until no additional blocks are found.
+
+    // STEP 2: SET ALL UNUSED BLOCKS TO 'FREE' (UNSET ALLOC BIT)
+    block_t *cur = heap;
+    block_t *prev = NULL;
+    while (cur)
+    {
+        if (cur->info & MARK_BIT)
+        {
+            // cur is marked; in use
+            cur->info &= ~MARK_BIT;  // unset mark bit
+            cur = cur->next;
+            prev = NULL;
+            continue;
+        }
+        // cur is not marked; not in use
+        cur->info &= ~ALLOC_BIT;    // unset alloc bit; set block as freed
+        // TODO: coalesce with prev block!
+        if (prev)
+        {
+            // set prev block size to old + (block struct size) + new
+            long prev_size = prev->info & SIZE_MASK;
+            prev->info &= ~SIZE_MASK;
+            prev_size += sizeof(block_t) + (cur->info & SIZE_MASK);
+            prev->info |= prev_size & SIZE_MASK;
+            // this block should remain `prev`
+        }
+        else
+        {
+            // allow next block to coalesce with this one if also freed
+            prev = cur;
+        }
+        // advance to the next block
+        cur = cur->next;
+    }
 
     return 0;
 }
@@ -120,6 +204,7 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
     }
     if (!cur)
     {
+        // TODO: no available block found (begin garbage collection)
         printf("[ERROR] no space available\n");
         return NULL;
     }
@@ -131,6 +216,10 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
     cur->info = infoMake(1, 0, size);
     cur->next = new;
     cur->finalizer = finalize;
+
+    // TODO: A "finalize" function should not call memAllocate. If this happens,
+    //  memAllocate should print an appropriate error message to stderr and then abort by
+    //  calling exit(-1).
 
     return (char *)cur + sizeof(block_t);   // return after the block
 }
