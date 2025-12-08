@@ -19,6 +19,11 @@ typedef struct Block {
     struct Block *next;
     void *finalizer;
 } block_t;
+/**
+ * TODO: Block->next can be calculated from Block->info & SIZE_MASK
+ * Block->next is therefore redundant.
+ * Future update should remove it if possible and instead calculate from the size.
+ */
 
 int initialized = 0;    // 0: NO, 1: YES, -1: FAILED
 block_t *heap = NULL;
@@ -44,6 +49,10 @@ static char inStackRange(unsigned long val)
 static char inHeapRange(unsigned long val)
 {
     return (unsigned long)heap <= val && val < ((unsigned long)heap) + total_heap_size;
+}
+[[maybe_unused]] static char inValidMemory(unsigned long val)
+{
+    return inGlobalRange(val) || inStackRange(val) || inHeapRange(val);
 }
 
 // END SMALL HELPERS
@@ -76,16 +85,37 @@ static char pointsToAllocatedData(unsigned long ptr)
     return (block->info & ALLOC_BIT) ? 1 : 0;
 }
 
+// mark and sweep protocol
 static int markAndSweep()
 {
+    // TODO: global "sweeping" variable so memAllocate isn't called during a finalizer
+    // TODO: CALL FINALIZER WHEN BLOCK IS SURELY FREED!
+
     // STEP 1: MARK ALL USED BLOCKS
     // 1a. search globals for references
     long global_length = ((long)_end - (long)__data_start) / sizeof(long);
     for (int i = 0; i < global_length; i++)
     {
+        unsigned long data = __data_start[i];
+        int iterations_left = 10;                               // limit iterations in case of infinite loop   
         // !!!!! pointsToAllocatedData(__data_start[i]);
         // TODO: travel down the linked list for each __data_start[i] until it finds a block IN USE that is pointed to
-
+        while (data && iterations_left-- > 0)
+        {
+            if (inHeapRange(data))
+            {
+                // figure out which block this is pointing to
+                block_t *block = getBlock(data);
+                // set the block's mark bit
+                block->info |= MARK_BIT;
+                data = 0;    // end loop
+            }
+            else if (inGlobalRange(data) || inHeapRange(data))
+            {
+                // data points to valid address, keep looking
+                data = *(long *)data;
+            }
+        }
     }
     // 1b. search stack for references
     int frame_count = 0;
@@ -104,6 +134,24 @@ static int markAndSweep()
         {
             // !!!!! pointsToAllocatedData(*addr);
             // TODO: travel down the linked list for each *addr until it finds a block IN USE that is pointed to
+            unsigned long data = *addr;
+            int iterations_left = 10;                           // limit iterations in case of infinite loops
+            while (data && iterations_left-- > 0)
+            {
+                if (inHeapRange(data))
+                {   
+                    // figure out which block this is pointing to
+                    block_t *block = getBlock(data);
+                    // set the block's mark bit
+                    block->info |= MARK_BIT;
+                    data = 0;    // end loop
+                }
+                else if (inGlobalRange(data) || inHeapRange(data))
+                {
+                    // data points to valid address, keep looking
+                    data = *(long *)data;
+                }
+            }
             addr++;
         }
         top = bottom;
@@ -130,7 +178,7 @@ static int markAndSweep()
         }
         // cur is not marked; not in use
         cur->info &= ~ALLOC_BIT;    // unset alloc bit; set block as freed
-        // TODO: coalesce with prev block!
+        // coalesce with prev block
         if (prev)
         {
             // set prev block size to old + (block struct size) + new
@@ -139,6 +187,9 @@ static int markAndSweep()
             prev_size += sizeof(block_t) + (cur->info & SIZE_MASK);
             prev->info |= prev_size & SIZE_MASK;
             // this block should remain `prev`
+            prev->next = cur->next;
+            // prev->finalizer = cur->finalizer;
+            // ^ block is already free; finalizer should not be called! (probably!!)
         }
         else
         {
@@ -176,6 +227,22 @@ int memInitialize(unsigned long size)
     return 1;
 }
 
+static block_t *nextBlockOfSize(unsigned long size)
+{
+    block_t *cur = heap;
+    while (cur)
+    {
+        if ((cur->info & SIZE_MASK) >= size - BLOCK_SIZE && !(cur->info & ALLOC_BIT))
+        {
+            // return this block
+            return cur;
+        }
+        cur = cur->next;
+    }
+    // no block of that size was found
+    return NULL;
+}
+
 void *memAllocate(unsigned long size, void (*finalize)(void *))
 {
     if (initialized != 1) return NULL;
@@ -192,36 +259,59 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
     // reduce the size of the previous block
     // TODO: no available block found (begin garbage collection)
 
-    block_t *cur = heap;
-    while (cur)
+    block_t *alloced = nextBlockOfSize(size);   // <-- the block we will return to the caller
+    if (!alloced)
     {
-        if ((cur->info & SIZE_MASK) >= size - BLOCK_SIZE && !(cur->info & ALLOC_BIT))
+        // no available block found. execute mark and sweep
+        [[maybe_unused]] int result = markAndSweep();
+        // TODO result
+        // try to find a block again
+        alloced = nextBlockOfSize(size);
+        if (!alloced)
         {
-            // insert new block here
-            break;
+            printf("[ERROR] no space available\n");
+            return NULL;
         }
-        cur = cur->next;
+        // block was found!
     }
-    if (!cur)
-    {
-        // TODO: no available block found (begin garbage collection)
-        printf("[ERROR] no space available\n");
-        return NULL;
-    }
-    block_t *new = (block_t *)((long *)cur + BLOCK_SIZE + size);
-    new->info = infoMake(0, 0, (cur->info & SIZE_MASK) - size - BLOCK_SIZE);
-    new->next = cur->next;
-    new->finalizer = NULL;
 
-    cur->info = infoMake(1, 0, size);
-    cur->next = new;
-    cur->finalizer = finalize;
+    // TODO: only generate a new block if it would not overwrite an existing block!
+
+    // we know that (long *)alloced + BLOCK_SIZE + "alloced->size" => alloced->next
+    // AND that `size` <= "alloced->size"
+    // two cases:
+    //      `size` is within BLOCK_SIZE of "alloced->size"  =>
+    //          cannot generate a new block, keep size (and next) the same
+    //      `size` is much smaller than "alloced->size"     =>
+    //          create a new block and set its size to the difference (account for block size)
+
+    unsigned long alloced_size = alloced->info & SIZE_MASK;
+    // new_size = alloced_size - size - BLOCK_SIZE
+    if (alloced_size - size >= BLOCK_SIZE + 1)       // i will not allow a block of zero to be generated.
+    {
+        // can accomodate for a new block
+        // "create" a new block
+        block_t *new = (block_t *)((long *)alloced + BLOCK_SIZE + size);
+        new->info = infoMake(0, 0, alloced_size - size - BLOCK_SIZE);
+        new->next = alloced->next;
+        new->finalizer = NULL;
+        // modify alloced to be what we want
+        alloced->info = infoMake(1, 0, size);
+        alloced->next = new;
+        alloced->finalizer = finalize;
+    } else {
+        // we cannot accomodate for a new block
+        // instead retain "alloced->size"; give the caller a slightly larger block (this is OK)
+        alloced->info = infoMake(1, 0, alloced_size);
+        // no change to alloced->next
+        alloced->finalizer = finalize;
+    }
 
     // TODO: A "finalize" function should not call memAllocate. If this happens,
     //  memAllocate should print an appropriate error message to stderr and then abort by
     //  calling exit(-1).
 
-    return (char *)cur + sizeof(block_t);   // return after the block
+    return (char *)alloced + sizeof(block_t);   // return after the block
 }
 
 void memDump(void)
