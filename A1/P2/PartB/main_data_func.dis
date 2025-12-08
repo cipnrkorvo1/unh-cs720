@@ -1,0 +1,30 @@
+Insymbol Section (3 entries)
+
+get42 16
+mainx20 0
+result 10
+
+Outsymbol Section (0 entries)
+
+
+Object Code (19 words)
+
+0000000    0000ed0b    addi         r13, r14
+0000001    00004003    ldimm        r0, 4
+0000002    00000e0c    subi         r14, r0
+0000003    0000c00f    call         16
+0000004    ffffd005    ldind        r0, -1(r13)
+0000005    0000a00f    call         16
+0000006    ffffd105    ldind        r1, -1(r13)
+0000007    0000100b    addi         r0, r1
+0000008    00001002    store        r0, 10
+0000009    00000000    halt
+0000010    00000000    NOP
+0000011    00000001    NOP
+0000012    00000002    NOP
+0000013    00000003    NOP
+0000014    00000004    NOP
+0000015    00000005    NOP
+0000016    0002a703    ldimm        r7, 42
+0000017    ffffd706    stind        r7, -1(r13)
+0000018    00000010    ret

@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "stdint.h": "c"
+    },
+    "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
+        "clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling",
+        "clang-analyzer-optin.taint.TaintedAlloc",
+        "clang-analyzer-security.insecureAPI.strcpy"
+    ]
+}

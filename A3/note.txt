@@ -1,0 +1,31 @@
+x86-64 passes discrete arugments in registers %rdi, %rsi, %rdx, %rcx, %r8, %r9
+Return value is expected to be in %rax
+Linux kernel is expected to pass the syscall number through %rax
+
+basic thread_join test driver
+==========
+void thread1(void *info) {
+    printf("%s\n", (char *)info);
+}
+
+int main(void) {
+    long tid = thread_create(thread1, "t1");
+    printf("1\n");
+    int set = thread_join(tid);
+    printf("2\n");
+}
+==========
+thread_yield:
+    caller stops executing and allows next thread in "ready list" to run [?]
+    "When thread_yield is called, the currently executing thread should be moved to the
+        end of the list of active threads and the thread that is now at the front of the list should
+        become the thread that is now executing. If there is only one active thread, then that
+        thread continues executing."
+
+thread_join:
+    caller waits for the thread to finish;
+    t1 thread_join(t2) means t1 will hang until t2 is finished
+    this is done by not putting t1 back into the "ready list" automatically;
+        it is deferred to t2 to do it instead
+        (t1's ID/TCB & is placed somewhere in t2 TCB)
+!!! detect (& avoid?) cycles in pointing for thread_join !!!

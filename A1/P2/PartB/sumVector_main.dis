@@ -1,0 +1,33 @@
+Insymbol Section (4 entries)
+
+done 19
+mainx20 0
+sum 1
+top 13
+
+Outsymbol Section (0 entries)
+
+
+Object Code (21 words)
+
+0000000    00007014    jmp          8
+0000001    00000000    NOP
+0000002    00000005    NOP
+0000003    00000001    NOP
+0000004    00000002    NOP
+0000005    00000003    NOP
+0000006    00000004    NOP
+0000007    00000005    NOP
+0000008    00000003    ldimm        r0, 0
+0000009    ffff8101    load         r1, 2
+0000010    ffff8204    ldaddr       r2, 3
+0000011    00000303    ldimm        r3, 0
+0000012    00001403    ldimm        r4, 1
+0000013    00051013    beq          r0, r1, 19
+0000014    00002505    ldind        r5, 0(r2)
+0000015    0000530b    addi         r3, r5
+0000016    0000420b    addi         r2, r4
+0000017    0000400b    addi         r0, r4
+0000018    ffffa014    jmp          13
+0000019    fffed302    store        r3, 1
+0000020    00000000    halt

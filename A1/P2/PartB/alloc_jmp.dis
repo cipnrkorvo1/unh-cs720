@@ -1,0 +1,33 @@
+Insymbol Section (1 entries)
+
+y 16
+
+Outsymbol Section (0 entries)
+
+
+Object Code (24 words)
+
+0000000    ffffb503    ldimm        r5, -5
+0000001    00001403    ldimm        r4, 1
+0000002    00000703    ldimm        r7, 0
+0000003    00002604    ldaddr       r6, 6
+0000004    fffff303    ldimm        r3, -1
+0000005    0000b014    jmp          17
+0000006    00000000    NOP
+0000007    00000000    NOP
+0000008    00000000    NOP
+0000009    00000000    NOP
+0000010    00000000    NOP
+0000011    0000000a    NOP
+0000012    0000000b    NOP
+0000013    0000000c    NOP
+0000014    0000000d    NOP
+0000015    0000000e    NOP
+0000016    00000000    NOP
+0000017    00043513    beq          r5, r3, 22
+0000018    00056705    ldind        r7, 5(r6)
+0000019    0000780b    addi         r8, r7
+0000020    0000350c    subi         r5, r3
+0000021    ffffb014    jmp          17
+0000022    ffff9802    store        r8, 16
+0000023    00000000    halt
