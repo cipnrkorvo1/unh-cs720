@@ -4,6 +4,8 @@
 
 #include "alloc.h"
 
+#define DEBUG 1
+
 #define ALLOC_BIT 0x8000000000000000
 #define MARK_BIT  0x4000000000000000
 #define SIZE_MASK 0x3FFFFFFFFFFFFFFF
@@ -27,7 +29,7 @@ typedef struct Block {
 
 int initialized = 0;    // 0: NO, 1: YES, -1: FAILED
 block_t *heap = NULL;
-unsigned long total_heap_size = 0;
+unsigned long total_heap_size = 0;  // number of words
 
 #define BLOCK_SIZE (sizeof(block_t) / 8)
 
@@ -48,7 +50,12 @@ static char inStackRange(unsigned long val)
 }
 static char inHeapRange(unsigned long val)
 {
-    return (unsigned long)heap <= val && val < ((unsigned long)heap) + total_heap_size;
+    #if DEBUG
+        char r = (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
+        if (r) printf("[DEBUG] %p <= %ld && %ld < %p\n", heap, val, val, heap + total_heap_size);
+        return r;
+    #endif
+    return (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
 }
 [[maybe_unused]] static char inValidMemory(unsigned long val)
 {
@@ -91,6 +98,8 @@ static int markAndSweep()
     // TODO: global "sweeping" variable so memAllocate isn't called during a finalizer
     // TODO: CALL FINALIZER WHEN BLOCK IS SURELY FREED!
 
+    if (DEBUG) printf("[DEBUG] markAndSweep() begin searching globals\n");
+
     // STEP 1: MARK ALL USED BLOCKS
     // 1a. search globals for references
     long global_length = ((long)_end - (long)__data_start) / sizeof(long);
@@ -118,6 +127,7 @@ static int markAndSweep()
         }
     }
     // 1b. search stack for references
+    if (DEBUG) printf("[ M&S ] begin searching stack\n");
     int frame_count = 0;
     char sweeping = 1;
     long *top = _stack_top;
@@ -164,6 +174,7 @@ static int markAndSweep()
     // must loop until no additional blocks are found.
 
     // STEP 2: SET ALL UNUSED BLOCKS TO 'FREE' (UNSET ALLOC BIT)
+    if (DEBUG) printf("[ M&S ] begin releasing unused/unmarked blocks\n");
     block_t *cur = heap;
     block_t *prev = NULL;
     while (cur)
@@ -205,6 +216,7 @@ static int markAndSweep()
 
 int memInitialize(unsigned long size)
 {
+    if (DEBUG) printf("[DEBUG] memInitialize(%ld)\n", size);
     if (initialized) return 0;      // cannot call more than once; failure
     initialized = -1;               // change to 1 when this succeeds
     
@@ -245,6 +257,7 @@ static block_t *nextBlockOfSize(unsigned long size)
 
 void *memAllocate(unsigned long size, void (*finalize)(void *))
 {
+    printf("[DEBUG] memAllocate(%ld, %p)\n", size, finalize);
     if (initialized != 1) return NULL;
 
     // set stack vars for memDump and searching
@@ -316,6 +329,7 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
 
 void memDump(void)
 {
+    if (DEBUG) printf("[DEBUG] memDump()\n");
     if (initialized != 1) return;
     if (sizeof(long) != 8UL) { fprintf(stderr, "long is not 64 bits!\n"); return; }
 
