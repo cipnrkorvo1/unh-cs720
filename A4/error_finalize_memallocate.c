@@ -20,6 +20,7 @@ int main(void)
     assert(memInitialize(1000) == 1 && "memInitialize failed.");
 
     [[maybe_unused]] void *ptr = memAllocate(100, finalize);
+    printf("ptr = %p\n", ptr);
 
     // take up rest of space
     void *pointers[100];
@@ -34,6 +35,7 @@ int main(void)
 
     // remove reference to ptr
     ptr = NULL;
+    printf("Removed reference to 100 word block.\n");
     // try to allocate again
     pointers[i] = memAllocate(80, NULL);
     assert(pointers[i] != NULL && "GC did not deallocate released block when it should have.\n");

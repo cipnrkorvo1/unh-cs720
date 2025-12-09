@@ -3,9 +3,9 @@ CFLAGS = -g -Wall
 SRC = alloc.c
 OBJ = alloc.o
 
-TESTS = driver error_finalize_memallocate
+TESTS = driver finalize_test error_finalize_memallocate ref_to_block_in_block recursive_stack_check
 
-.PHONY: all clean rebuild test
+.PHONY: all clean rebuild test cmptest
 all: alloc
 
 alloc:
@@ -22,7 +22,14 @@ test: alloc
 	done
 	@$(MAKE) clean
 
+# just compiles the tests into execs
+cmptest: alloc
+	@for test in $(TESTS); do \
+		$(CC) -o $$test $$test.c liballoc.a $(CFLAGS);\
+	done
+	@echo "compiled tests: $(TESTS)"
+
 clean:
-	rm -f *.o liballoc.a
+	rm -f *.o liballoc.a $(TESTS)
 
 rebuild: clean all

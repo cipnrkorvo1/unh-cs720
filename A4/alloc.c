@@ -4,7 +4,7 @@
 
 #include "alloc.h"
 
-#define DEBUG 1
+#define DEBUG 0
 
 #define ALLOC_BIT 0x8000000000000000
 #define MARK_BIT  0x4000000000000000
@@ -27,9 +27,10 @@ typedef struct Block {
  * Future update should remove it if possible and instead calculate from the size.
  */
 
-int initialized = 0;    // 0: NO, 1: YES, -1: FAILED
-block_t *heap = NULL;
-unsigned long total_heap_size = 0;  // number of words
+static int initialized = 0;    // 0: NO, 1: YES, -1: FAILED
+static block_t *heap = NULL;
+static unsigned long total_heap_size = 0;  // number of words
+static char in_finalize_call = 0;
 
 #define BLOCK_SIZE (sizeof(block_t) / 8)
 
@@ -50,12 +51,8 @@ static char inStackRange(unsigned long val)
 }
 static char inHeapRange(unsigned long val)
 {
-    #if DEBUG
-        char r = (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
-        if (r) printf("[DEBUG] %p <= %ld && %ld < %p\n", heap, val, val, heap + total_heap_size);
-        return r;
-    #endif
-    return (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
+    //return (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
+    return (unsigned long)heap <= val && val < (unsigned long)heap + (total_heap_size * sizeof(long));
 }
 [[maybe_unused]] static char inValidMemory(unsigned long val)
 {
@@ -67,19 +64,28 @@ static char inHeapRange(unsigned long val)
 // returns the block that the ptr resides within, or NULL if invalid
 static block_t* getBlock(unsigned long ptr)
 {
-    if (initialized != 1 || !heap) return NULL;
-    if (!((unsigned long)heap) - 1 <= ptr && ((unsigned long)heap) + (total_heap_size * sizeof(long)) >= ptr)
-    {
+    if (initialized != 1 || !heap) {
+        if (DEBUG) printf("[getBlock] initialized != 1 || !heap\n");
         return NULL;
     }
+    if (ptr < (unsigned long)heap || ptr >= (unsigned long)((long *)heap + total_heap_size))
+    {
+        //if (DEBUG) printf("[getBlock] ptr is outside of heap\n");
+        return NULL;
+    }
+
     block_t *cur = heap;
-    block_t *prev = NULL;
+    block_t *prev = heap;
     while (cur && (unsigned long)cur < ptr)
     {
         prev = cur;
         cur = cur->next;
     }
-    if (!cur) return NULL;
+    if (!cur) {
+        if (DEBUG) printf("[getBlock] cur == NULL; did not find a block\n");
+        return NULL;
+    }
+    //if (DEBUG) printf("[getBlock] ptr %p located in %p\n", (void*)ptr, prev);
     return prev;
 }
 
@@ -95,29 +101,42 @@ static char pointsToAllocatedData(unsigned long ptr)
 // mark and sweep protocol
 static int markAndSweep()
 {
-    // TODO: global "sweeping" variable so memAllocate isn't called during a finalizer
-    // TODO: CALL FINALIZER WHEN BLOCK IS SURELY FREED!
 
     if (DEBUG) printf("[DEBUG] markAndSweep() begin searching globals\n");
 
     // STEP 1: MARK ALL USED BLOCKS
     // 1a. search globals for references
     long global_length = ((long)_end - (long)__data_start) / sizeof(long);
+    int blocks_marked = 0;
     for (int i = 0; i < global_length; i++)
     {
         unsigned long data = __data_start[i];
-        int iterations_left = 10;                               // limit iterations in case of infinite loop   
-        // !!!!! pointsToAllocatedData(__data_start[i]);
-        // TODO: travel down the linked list for each __data_start[i] until it finds a block IN USE that is pointed to
+        int iterations_left = 100;                              // limit iterations in case of infinite loop   
         while (data && iterations_left-- > 0)
         {
             if (inHeapRange(data))
             {
                 // figure out which block this is pointing to
                 block_t *block = getBlock(data);
-                // set the block's mark bit
-                block->info |= MARK_BIT;
-                data = 0;    // end loop
+                if (data == (unsigned long)heap)
+                {
+                    if (DEBUG) printf("data == heap\n");
+                    // ignore! -- this is most likely the reference in this file!
+                    data = 0;   // end loop
+                    continue;
+                }
+                // only do something if mark bit is not set yet
+                if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
+                {
+                    // set the block's mark bit
+                    block->info |= MARK_BIT;
+                    blocks_marked++;
+                    data = 0;    // end loop
+                }
+                else
+                {
+                    data = *(long *)data;
+                }
             }
             else if (inGlobalRange(data) || inHeapRange(data))
             {
@@ -126,8 +145,10 @@ static int markAndSweep()
             }
         }
     }
+    if (DEBUG) printf("[ M&S ] globals: marked %d blocks.\n", blocks_marked);
     // 1b. search stack for references
     if (DEBUG) printf("[ M&S ] begin searching stack\n");
+    blocks_marked = 0;
     int frame_count = 0;
     char sweeping = 1;
     long *top = _stack_top;
@@ -142,19 +163,26 @@ static int markAndSweep()
         long *addr = top;
         while (addr <= bottom)
         {
-            // !!!!! pointsToAllocatedData(*addr);
-            // TODO: travel down the linked list for each *addr until it finds a block IN USE that is pointed to
             unsigned long data = *addr;
-            int iterations_left = 10;                           // limit iterations in case of infinite loops
+            int iterations_left = 100;                          // limit iterations in case of infinite loops
             while (data && iterations_left-- > 0)
             {
                 if (inHeapRange(data))
                 {   
                     // figure out which block this is pointing to
                     block_t *block = getBlock(data);
-                    // set the block's mark bit
-                    block->info |= MARK_BIT;
-                    data = 0;    // end loop
+                    // only do something if mark bit is not set yet
+                    if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
+                    {
+                        // set the block's mark bit
+                        block->info |= MARK_BIT;
+                        blocks_marked++;
+                        data = 0;    // end loop
+                    }
+                    else
+                    {
+                        data = *(long *)data;
+                    }
                 }
                 else if (inGlobalRange(data) || inHeapRange(data))
                 {
@@ -167,18 +195,61 @@ static int markAndSweep()
         top = bottom;
         bottom = (long *)*bottom;
     }
+    if (DEBUG) printf("[ M&S ] stack: marked %d blocks.\n", blocks_marked);
+    blocks_marked = 0;
     // 1c. search heap for references
     // TODO
     // if a reference to block A is located in an unmarked block B, the ref is invalid
     // but if block C is marked and has a ref to block B then B is marked, then the ref to A is valid!
     // must loop until no additional blocks are found.
+    {
+    block_t *cur = heap;
+    char marked_any = 1;
+    while (marked_any)
+    {
+        cur = heap;
+        marked_any = 0;
+        while (cur)
+        {
+            long *ptr = ((long *)cur) + BLOCK_SIZE;
+            long *end = ((long *)cur) + (cur->info & SIZE_MASK);
+            while (ptr < end)
+            {
+                unsigned long data = *ptr;
+                if (inHeapRange(data))
+                {
+                    block_t *block = getBlock(data);
+                    // only do something if mark bit is not set yet
+                    if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
+                    {
+                        // set the block's mark bit
+                        block->info |= MARK_BIT;
+                        blocks_marked++;
+                        marked_any = 1;
+                        data = 0;    // end loop
+                    }
+                    else
+                    {
+                        data = *(long *)data;
+                    }
+                }
+            }
+            cur = cur->next;
+        }
+    }
 
+    }
     // STEP 2: SET ALL UNUSED BLOCKS TO 'FREE' (UNSET ALLOC BIT)
     if (DEBUG) printf("[ M&S ] begin releasing unused/unmarked blocks\n");
     block_t *cur = heap;
     block_t *prev = NULL;
+    unsigned long words_freed = 0;
     while (cur)
     {
+        if (DEBUG)
+        {
+            printf("[DEBUG] Block: info=%.16lx\n", cur->info);
+        }
         if (cur->info & MARK_BIT)
         {
             // cur is marked; in use
@@ -187,20 +258,32 @@ static int markAndSweep()
             prev = NULL;
             continue;
         }
-        // cur is not marked; not in use
-        cur->info &= ~ALLOC_BIT;    // unset alloc bit; set block as freed
+
+        // cur is not marked; no longer in use
+        if (cur->info & ALLOC_BIT)
+        {
+            // unset alloc bit; set block as freed
+            cur->info &= ~ALLOC_BIT;    
+            words_freed += (cur->info & SIZE_MASK);
+            // block is surely freed; call finalizer
+            in_finalize_call = 1;
+            ((void (*)(void))cur->finalizer)();
+            in_finalize_call = 0;
+        }
+        
         // coalesce with prev block
         if (prev)
         {
             // set prev block size to old + (block struct size) + new
             long prev_size = prev->info & SIZE_MASK;
             prev->info &= ~SIZE_MASK;
-            prev_size += sizeof(block_t) + (cur->info & SIZE_MASK);
+            prev_size += BLOCK_SIZE + (cur->info & SIZE_MASK);
             prev->info |= prev_size & SIZE_MASK;
             // this block should remain `prev`
             prev->next = cur->next;
             // prev->finalizer = cur->finalizer;
             // ^ block is already free; finalizer should not be called! (probably!!)
+            words_freed += BLOCK_SIZE;
         }
         else
         {
@@ -210,6 +293,7 @@ static int markAndSweep()
         // advance to the next block
         cur = cur->next;
     }
+    if (DEBUG) printf("[DEBUG] %lu words freed\n", words_freed);
 
     return 0;
 }
@@ -257,8 +341,13 @@ static block_t *nextBlockOfSize(unsigned long size)
 
 void *memAllocate(unsigned long size, void (*finalize)(void *))
 {
-    printf("[DEBUG] memAllocate(%ld, %p)\n", size, finalize);
+    if (DEBUG) printf("[DEBUG] memAllocate(%ld, %p)\n", size, finalize);
     if (initialized != 1) return NULL;
+    if (in_finalize_call)
+    {
+        fprintf(stderr, "memAllocate called in a finalizer.\n");
+        exit(-1);
+    }
 
     // set stack vars for memDump and searching
     __asm("\t mov %%rsp,%0\n\t" : "=r"(_stack_top));
@@ -270,7 +359,6 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
     // - large enough
     // keep track of previous block to insert the new block into the linked list
     // reduce the size of the previous block
-    // TODO: no available block found (begin garbage collection)
 
     block_t *alloced = nextBlockOfSize(size);   // <-- the block we will return to the caller
     if (!alloced)
@@ -282,13 +370,11 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
         alloced = nextBlockOfSize(size);
         if (!alloced)
         {
-            printf("[ERROR] no space available\n");
+            if (DEBUG) printf("[ERROR] no space available\n");
             return NULL;
         }
         // block was found!
     }
-
-    // TODO: only generate a new block if it would not overwrite an existing block!
 
     // we know that (long *)alloced + BLOCK_SIZE + "alloced->size" => alloced->next
     // AND that `size` <= "alloced->size"
@@ -320,10 +406,7 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
         alloced->finalizer = finalize;
     }
 
-    // TODO: A "finalize" function should not call memAllocate. If this happens,
-    //  memAllocate should print an appropriate error message to stderr and then abort by
-    //  calling exit(-1).
-
+    if (DEBUG) printf("[DEBUG] allocated a block of size %ld (%ld)+(%ld) words\n", (alloced->info & SIZE_MASK) + BLOCK_SIZE, BLOCK_SIZE, alloced->info & SIZE_MASK);
     return (char *)alloced + sizeof(block_t);   // return after the block
 }
 
@@ -434,7 +517,7 @@ void memDump(void)
             (cur->info) & ALLOC_BIT ? "Allocated" : "Free", cur_size);
         if (cur->info & ALLOC_BIT)
         {
-            printf("Finalizer @ 0x%lx\n", (long)(cur->finalizer));   // TODO finalizer function
+            printf("Finalizer @ 0x%lx\n", (long)(cur->finalizer));
             printf("    %16s: %16s\n", "Address", "Value");
             // TODO skip large lines of non-members
             long *ptr = (long *)((char *)cur + sizeof(block_t));
