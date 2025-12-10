@@ -4,7 +4,7 @@
 
 #include "alloc.h"
 
-#define DEBUG 0
+#define DEBUG 2
 
 #define ALLOC_BIT 0x8000000000000000
 #define MARK_BIT  0x4000000000000000
@@ -107,7 +107,6 @@ static char pointsToAllocatedData(unsigned long ptr)
 // returns the total number of words freed
 static int markAndSweep()
 {
-
     if (DEBUG) printf("[DEBUG] markAndSweep() begin searching globals\n");
 
     // STEP 1: MARK ALL USED BLOCKS
@@ -144,7 +143,7 @@ static int markAndSweep()
                     data = *(long *)data;
                 }
             }
-            else if (inGlobalRange(data) || inHeapRange(data))
+            else if (inGlobalRange(data) || inStackRange(data))
             {
                 // data points to valid address, keep looking
                 data = *(long *)data;
@@ -159,6 +158,7 @@ static int markAndSweep()
     char sweeping = 1;
     long *top = _stack_top;
     long *bottom = _frame_bottom;
+    if (DEBUG == 2) printf("[STACK] top=%p bottom=%p\n", top, bottom);
     while (sweeping)
     {
         // check if bottom is a valid frame base first
@@ -190,7 +190,7 @@ static int markAndSweep()
                         data = *(long *)data;
                     }
                 }
-                else if (inGlobalRange(data) || inHeapRange(data))
+                else if (inGlobalRange(data) || inStackRange(data))
                 {
                     // data points to valid address, keep looking
                     data = *(long *)data;
@@ -443,7 +443,11 @@ void memDump(void)
     for (int i = 0; i < global_length; i++)
     {
         printf("%20p: %16lx%s\n", &(__data_start[i]), __data_start[i],
-            pointsToAllocatedData(__data_start[i]) ? " *" : "  ");
+            __data_start[i] == (long)heap ? 
+                " * <- block_t *heap"
+            :
+                pointsToAllocatedData(__data_start[i]) ? " *" : "  "
+        );
     }
     printf("\nEnd globals.\n");
 
@@ -474,46 +478,6 @@ void memDump(void)
     }
     printf("\nEnd stack frames.\n");
 
-    // START OLD STACK
-    // // locate bottom of stack
-    // char success = 0;       // for sanity checks
-    // long ptr = rbp;         // duplicate rbp
-    // long prev = 0;
-    // long bottom = 0;
-    // int frame_count = 0;    // if goes over, something broke...
-    // while (frame_count++ < 1024)
-    // {
-    //     if (ptr <= rsp) { success = 1; break; }                 // success condition
-    //     if (ptr == prev) { success = -1; break; }               // infinite loop
-    //     if (ptr & (sizeof(void*)-1)) { success = -2; break; }   // check for alignment
-    //     long next = *(long *)ptr;                               // try dereferencing                  
-    //     prev = ptr;
-    //     bottom = ptr;
-    //     ptr = next;
-    // }
-    // if (success < 1)
-    // {
-    //     fprintf(stderr, "frame checking failed %d\n", success);
-    //     exit(-1);
-    // }
-    // long stack_length = (bottom - rsp) / sizeof(long);
-    // printf("\nStack Memory:\n");
-    // printf("start  = %.16lx\nend    = %.16lx\nlength = %ld words\n", 
-    //     rsp, bottom, stack_length);
-    // printf("-- top of stack area (low address) --");
-    // // dump stack (more safely)
-    // long max_words = 1 << 20;
-    // long words = (bottom > rsp) ? ((bottom - rsp) / sizeof(long)) : 0;
-    // if (words > max_words) words = max_words;
-    // for (long i = 0; i < words; ++i)
-    // {
-    //     long addr = rsp + i * sizeof(long);
-    //     printf("\n%.16lx : %.16lx%s", addr, *(long*)addr,
-    //         pointsToAllocatedData(*(long*)addr) ? " *" : "  ");
-    // }
-    // printf("\n-- bottom of stack (high address) --\n");
-    // END OLD STACK
-
     printf("\nRegisters:\n");
     printf("%%rbx = %.16lx  %%rsi = %.16lx  %%rdi = %.16lx\n", rbx, rsi, rdi);
 
@@ -531,7 +495,7 @@ void memDump(void)
         {
             printf("Finalizer @ 0x%lx\n", (long)(cur->finalizer));
             printf("    %16s: %16s\n", "Address", "Value");
-            
+
             long *ptr = (long *)((char *)cur + sizeof(block_t));
             for (int i = 0; i < cur_size; i++)
             {
