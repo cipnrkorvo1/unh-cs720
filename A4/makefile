@@ -3,7 +3,7 @@ CFLAGS = -g -Wall
 SRC = alloc.c
 OBJ = alloc.o
 
-TESTS = driver finalize_test error_finalize_memallocate ref_to_block_in_block recursive_stack_check
+TESTS = misc_driver finalize_test error_finalize_memallocate ref_to_block_in_block recursive_stack_check
 
 .PHONY: all clean rebuild test cmptest
 all: alloc

@@ -61,6 +61,12 @@ static char inHeapRange(unsigned long val)
 
 // END SMALL HELPERS
 
+// called at exit, frees all allocated memory
+static void freeAll(void)
+{
+    free(heap);
+}
+
 // returns the block that the ptr resides within, or NULL if invalid
 static block_t* getBlock(unsigned long ptr)
 {
@@ -90,7 +96,6 @@ static block_t* getBlock(unsigned long ptr)
 }
 
 // function to check whether ptr points to allocated data
-// TODO: check down linked list of references? perhaps another function
 static char pointsToAllocatedData(unsigned long ptr)
 {
     block_t *block = getBlock(ptr);
@@ -99,6 +104,7 @@ static char pointsToAllocatedData(unsigned long ptr)
 }
 
 // mark and sweep protocol
+// returns the total number of words freed
 static int markAndSweep()
 {
 
@@ -295,7 +301,7 @@ static int markAndSweep()
     }
     if (DEBUG) printf("[DEBUG] %lu words freed\n", words_freed);
 
-    return 0;
+    return words_freed;
 }
 
 int memInitialize(unsigned long size)
@@ -319,6 +325,7 @@ int memInitialize(unsigned long size)
     __asm("\t mov %%rbp,%0\n\t" : "=r"(_frame_bottom));
 
     // success
+    atexit(freeAll);
     initialized = 1;
     return 1;
 }
@@ -364,8 +371,13 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
     if (!alloced)
     {
         // no available block found. execute mark and sweep
-        [[maybe_unused]] int result = markAndSweep();
-        // TODO result
+        int result = markAndSweep();
+        if (result == 0)
+        {
+            // no blocks were freed;
+            if (DEBUG) printf("[ERROR] no space available\n");
+            return NULL;
+        }
         // try to find a block again
         alloced = nextBlockOfSize(size);
         if (!alloced)
