@@ -272,9 +272,12 @@ static int markAndSweep()
             cur->info &= ~ALLOC_BIT;    
             words_freed += (cur->info & SIZE_MASK);
             // block is surely freed; call finalizer
-            in_finalize_call = 1;
-            ((void (*)(void))cur->finalizer)();
-            in_finalize_call = 0;
+            if (cur->finalizer)
+            {
+                in_finalize_call = 1;
+                ((void (*)(void))cur->finalizer)();
+                in_finalize_call = 0;
+            }
         }
         
         // coalesce with prev block

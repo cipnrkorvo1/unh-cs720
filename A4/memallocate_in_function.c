@@ -27,6 +27,7 @@ int main()
     function();
     printf("<> MEMDUMP 2 <>\n");
     memDump();
+    fflush(stdout);
 
     // original block should have gone out of scope; trigger coalesce
     assert(memAllocate(200, NULL) != NULL);
