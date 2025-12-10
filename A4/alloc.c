@@ -4,7 +4,7 @@
 
 #include "alloc.h"
 
-#define DEBUG 2
+#define DEBUG 1
 
 #define ALLOC_BIT 0x8000000000000000
 #define MARK_BIT  0x4000000000000000
@@ -158,9 +158,9 @@ static int markAndSweep()
     char sweeping = 1;
     long *top = _stack_top;
     long *bottom = _frame_bottom;
-    if (DEBUG == 2) printf("[STACK] top=%p bottom=%p\n", top, bottom);
     while (sweeping)
     {
+        if (DEBUG == 2) printf("[STACK] top=%p bottom=%p\n", top, bottom);
         // check if bottom is a valid frame base first
         if (bottom <= top || !bottom) break;                    // bottom invalid value
         if (bottom == top || frame_count > 128) break;          // infinite loop
@@ -208,7 +208,7 @@ static int markAndSweep()
     // but if block C is marked and has a ref to block B then B is marked, then the ref to A is valid!
     // must loop until no additional blocks are found.
     {
-    block_t *cur = heap;
+    block_t *cur;
     char marked_any = 1;
     while (marked_any)
     {
@@ -218,6 +218,7 @@ static int markAndSweep()
         {
             long *ptr = ((long *)cur) + BLOCK_SIZE;
             long *end = ((long *)cur) + (cur->info & SIZE_MASK);
+            // TODO: something is wonky with this logic... figure out how to fix it.
             while (ptr < end)
             {
                 unsigned long data = *ptr;
@@ -243,6 +244,7 @@ static int markAndSweep()
             cur = cur->next;
         }
     }
+    if (DEBUG) printf("[ M&S ] heap: marked %d blocks.\n", blocks_marked);
 
     }
     // STEP 2: SET ALL UNUSED BLOCKS TO 'FREE' (UNSET ALLOC BIT)
@@ -421,7 +423,7 @@ void *memAllocate(unsigned long size, void (*finalize)(void *))
         alloced->finalizer = finalize;
     }
 
-    if (DEBUG) printf("[DEBUG] allocated a block of size %ld (%ld)+(%ld) words\n", (alloced->info & SIZE_MASK) + BLOCK_SIZE, BLOCK_SIZE, alloced->info & SIZE_MASK);
+    if (DEBUG) printf("[DEBUG] allocated a block of size %ld (%ld)+(%ld) words at %p\n", (alloced->info & SIZE_MASK) + BLOCK_SIZE, BLOCK_SIZE, alloced->info & SIZE_MASK, alloced);
     return (char *)alloced + sizeof(block_t);   // return after the block
 }
 
@@ -500,7 +502,8 @@ void memDump(void)
             printf("    %16s: %16s\n", "Address", "Value");
 
             long *ptr = (long *)((char *)cur + sizeof(block_t));
-            for (int i = 0; i < cur_size; i++)
+            int i = 0;
+            while (i < cur_size)
             {
                 long *start_ptr = ptr + i;
                 if (start_ptr[0] == 0)
