@@ -535,8 +535,38 @@ void memDump(void)
             long *ptr = (long *)((char *)cur + sizeof(block_t));
             for (int i = 0; i < cur_size; i++)
             {
-                printf("%20p: %16lx%s\n", ptr, *ptr, pointsToAllocatedData(*ptr) ? " *" : " ");
-                ptr++;
+                long *start_ptr = ptr + i;
+                if (start_ptr[0] == 0)
+                {
+                    // zero cluster case
+                    int start = i;
+                    int end = i;
+                    while (end < cur_size && start_ptr[end - start] == 0)
+                        end++;
+                    int zeros = end - start;
+                    if (zeros == 1)
+                    {
+                        // single zero, print normally
+                        printf("%20p: %16lx\n", start_ptr, 0L);
+                    }
+                    else
+                    {
+                        // first zero
+                        printf("%20p: %16lx\n", start_ptr, 0L);      
+                        // skip message
+                        if (zeros > 2) printf("       ... <skipped %d words of 0> ...\n", zeros - 2);    
+                        // last zero
+                        printf("%20p: %16lx\n", start_ptr + (zeros-1), 0L);              
+                    }
+                    i = end;    // skip the whole cluster of zeros
+                }
+                else
+                {
+                    // normal value
+                    printf("%20p: %16lx%s\n", start_ptr, *start_ptr, pointsToAllocatedData(*start_ptr) ? " *" : " ");
+                    i++;
+                }
+
             }
             printf("\n");
         }
