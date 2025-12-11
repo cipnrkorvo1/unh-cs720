@@ -4,7 +4,7 @@
 
 #include "alloc.h"
 
-#define DEBUG 1
+#define DEBUG 2
 
 #define ALLOC_BIT 0x8000000000000000
 #define MARK_BIT  0x4000000000000000
@@ -32,7 +32,7 @@ static block_t *heap = NULL;
 static unsigned long total_heap_size = 0;  // number of words
 static char in_finalize_call = 0;
 
-#define BLOCK_SIZE (sizeof(block_t) / 8)
+#define BLOCK_SIZE (sizeof(block_t) / sizeof(long))
 
 // SMALL HELPERS
 
@@ -41,22 +41,22 @@ static unsigned long infoMake(int alloc, int mark, unsigned long size)
     return ((long)alloc << 63) | ((long)(mark & 1) << 62) | (size & SIZE_MASK);
 }
 
-static char inGlobalRange(unsigned long val)
+static char inGlobalRange(unsigned long addr)
 {
-    return (unsigned long)__data_start <= val && val < (unsigned long)_end;
+    return (unsigned long)__data_start <= addr && addr < (unsigned long)_end;
 }
-static char inStackRange(unsigned long val)
+static char inStackRange(unsigned long addr)
 {
-    return (unsigned long)_frame_bottom > val && val >= (unsigned long)_stack_top;
+    return (unsigned long)_frame_bottom > addr && addr >= (unsigned long)_stack_top;
 }
-static char inHeapRange(unsigned long val)
+static char inHeapRange(unsigned long addr)
 {
     //return (unsigned long)heap <= val && val < (unsigned long)(heap + total_heap_size);
-    return (unsigned long)heap <= val && val < (unsigned long)heap + (total_heap_size * sizeof(long));
+    return (unsigned long)heap <= addr && addr < (unsigned long)heap + (total_heap_size * sizeof(long));
 }
-[[maybe_unused]] static char inValidMemory(unsigned long val)
+[[maybe_unused]] static char inValidMemory(unsigned long addr)
 {
-    return inGlobalRange(val) || inStackRange(val) || inHeapRange(val);
+    return inGlobalRange(addr) || inStackRange(addr) || inHeapRange(addr);
 }
 
 // END SMALL HELPERS
@@ -115,19 +115,19 @@ static int markAndSweep()
     int blocks_marked = 0;
     for (int i = 0; i < global_length; i++)
     {
-        unsigned long data = __data_start[i];
+        unsigned long word = __data_start[i];
         int iterations_left = 100;                              // limit iterations in case of infinite loop   
-        while (data && iterations_left-- > 0)
+        while (word && iterations_left-- > 0)
         {
-            if (inHeapRange(data))
+            if (inHeapRange(word))
             {
                 // figure out which block this is pointing to
-                block_t *block = getBlock(data);
-                if (data == (unsigned long)heap)
+                block_t *block = getBlock(word);
+                if (__data_start[i] == (long)&heap)
                 {
                     if (DEBUG) printf("data == heap\n");
                     // ignore! -- this is most likely the reference in this file!
-                    data = 0;   // end loop
+                    word = 0;   // end loop
                     continue;
                 }
                 // only do something if mark bit is not set yet
@@ -136,17 +136,17 @@ static int markAndSweep()
                     // set the block's mark bit
                     block->info |= MARK_BIT;
                     blocks_marked++;
-                    data = 0;    // end loop
+                    word = 0;    // end loop
                 }
                 else
                 {
-                    data = *(long *)data;
+                    word = *(long *)word;
                 }
             }
-            else if (inGlobalRange(data) || inStackRange(data))
+            else if (inGlobalRange(word) || inStackRange(word))
             {
                 // data points to valid address, keep looking
-                data = *(long *)data;
+                word = *(long *)word;
             }
         }
     }
@@ -169,31 +169,38 @@ static int markAndSweep()
         long *addr = top;
         while (addr <= bottom)
         {
-            unsigned long data = *addr;
+            unsigned long word = *addr;
             int iterations_left = 100;                          // limit iterations in case of infinite loops
-            while (data && iterations_left-- > 0)
+            while (word && iterations_left-- > 0)
             {
-                if (inHeapRange(data))
+                if (inHeapRange(word))
                 {   
                     // figure out which block this is pointing to
-                    block_t *block = getBlock(data);
+                    block_t *block = getBlock(word);
+                    if (addr == (long *)&heap)
+                    {
+                        if (DEBUG) printf("data == heap\n");
+                        // ignore! -- this is most likely the reference in this file!
+                        word = 0;   // end loop
+                        continue;
+                    }
                     // only do something if mark bit is not set yet
                     if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
                     {
                         // set the block's mark bit
                         block->info |= MARK_BIT;
                         blocks_marked++;
-                        data = 0;    // end loop
+                        word = 0;    // end loop
                     }
                     else
                     {
-                        data = *(long *)data;
+                        word = *(long *)word;
                     }
                 }
-                else if (inGlobalRange(data) || inStackRange(data))
+                else if (inGlobalRange(word) || inStackRange(word))
                 {
                     // data points to valid address, keep looking
-                    data = *(long *)data;
+                    word = *(long *)word;
                 }
             }
             addr++;
@@ -212,34 +219,52 @@ static int markAndSweep()
     char marked_any = 1;
     while (marked_any)
     {
+        // loop over the whole heap until no blocks are marked
         cur = heap;
         marked_any = 0;
         while (cur)
         {
-            long *ptr = ((long *)cur) + BLOCK_SIZE;
-            long *end = ((long *)cur) + (cur->info & SIZE_MASK);
-            // TODO: something is wonky with this logic... figure out how to fix it.
-            while (ptr < end)
+            unsigned long *start = (unsigned long *)cur + BLOCK_SIZE;   // cur + 1 block size
+            long idx = 0;
+            long max = cur->info & SIZE_MASK;
+            while (idx < max)
             {
-                unsigned long data = *ptr;
-                if (inHeapRange(data))
+                unsigned long word = start[idx];
+                while (word)
                 {
-                    block_t *block = getBlock(data);
-                    // only do something if mark bit is not set yet
-                    if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
+                    if (inHeapRange(word))
                     {
-                        // set the block's mark bit
-                        block->info |= MARK_BIT;
-                        blocks_marked++;
-                        marked_any = 1;
-                        data = 0;    // end loop
+                        block_t *block = getBlock(word);
+                        if (!block)
+                        {
+                            fprintf(stderr, "FATAL: inHeapRange==true failed to getBlock\n");
+                            exit(-1);
+                        }
+                        // only do something if block is allocated and not marked yet
+                        if ((block->info & MARK_BIT) == 0 && (block->info & ALLOC_BIT))
+                        {
+                            // set the block's mark bit
+                            block->info |= MARK_BIT;
+                            blocks_marked++;
+                            marked_any = 1;
+                            word = 0;   // end loop
+                        }
+                        else
+                        {
+                            // see if this is a ptr to a block
+                            word = *(unsigned long *)word;
+                        }
+                    }
+                    else if (inGlobalRange(word) || inStackRange(word))
+                    {
+                        word = *(unsigned long *)word;
                     }
                     else
                     {
-                        data = *(long *)data;
+                        word = 0;   // end loop
                     }
                 }
-                ptr++;
+                idx++;
             }
             cur = cur->next;
         }
@@ -317,7 +342,7 @@ int memInitialize(unsigned long size)
     
     if (size <= 0) return 0;        // size must be greater than zero
     if (size > (unsigned long)SIZE_MASK) return 0; // size cannot be larger than the mask can handle
-    total_heap_size = size * 1.2;
+    total_heap_size = size * 6 / 5;
     heap = calloc(8, total_heap_size);    // allocate memory for heap, put into block
     if (!heap) return 0;            // failed to allocate memory
 

@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "alloc.h"
 
@@ -12,11 +13,15 @@ void final()
 
 void function()
 {
-    [[maybe_unused]] long a = ~0;
-    [[maybe_unused]] void *ptr = memAllocate(150, final);
-    [[maybe_unused]] long b = ~1;
-    //printf("<> MEMDUMP 1 <>\n");
-    //memDump();
+    long a = ~0;
+    long *ptr = memAllocate(150, final);
+    if (!ptr) 
+    {
+        printf("memAllocate in function failed.\n");
+        exit(-1);
+    }
+    long b = ~1;
+    (void)(a + b);
 }
 
 int main()
@@ -24,7 +29,12 @@ int main()
     assert(memInitialize(200) == 1);
 
     // finalizer = NULL
-    void *ptr = memAllocate(180, NULL);
+    long *ptr = memAllocate(180, NULL);
+    if (!ptr)
+    {
+        printf("first memAllocate in main failed.\n");
+        exit(-1);
+    }
     ptr = NULL;
     // immediately dump ptr away
 

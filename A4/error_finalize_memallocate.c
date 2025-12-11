@@ -12,6 +12,7 @@ void finalize(void *)
 {
     void *ptr = memAllocate(sizeof(long), func);
     *(long *)ptr = 0xffaaffaa;
+    (void)ptr;
     printf("If this printed, memAllocate did not fail like it should have.\n");
 }
 
